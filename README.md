@@ -1,0 +1,1 @@
+alterego-ai lets you run an AI version of yourself that chats with people in your voice. You write your style guide and facts, plug in your own model key, and self-host it. It always tells people it’s an AI.
