@@ -102,6 +102,9 @@ class ChatHandler:
         # Regular conversation message: trigger typing indicator while processing
         await self.telegram.send_chat_action(chat_id=chat_id, action="typing")
 
+        if is_first:
+            self.state.mark_seen(chat_id)
+
         try:
             # Build persona system prompt
             system_prompt = self.persona_loader.build_system_prompt(persona_name=persona_name)
@@ -118,7 +121,6 @@ class ChatHandler:
 
             # Prepend disclosure if first time chatting
             if is_first:
-                self.state.mark_seen(chat_id)
                 final_reply = f"Hi, I'm an AI version of {persona_name}.\n\n{raw_reply}"
             else:
                 final_reply = raw_reply
@@ -132,6 +134,10 @@ class ChatHandler:
                 chat_id,
                 type(err).__name__,
             )
-            apology = "Sorry, I ran into an issue generating a response right now. Please try again in a moment."
+            base_apology = "Sorry, I ran into an issue generating a response right now. Please try again in a moment."
+            if is_first:
+                apology = f"Hi, I'm an AI version of {persona_name}.\n\n{base_apology}"
+            else:
+                apology = base_apology
             await self.telegram.send_message(chat_id=chat_id, text=apology)
 

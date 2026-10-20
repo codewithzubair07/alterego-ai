@@ -51,6 +51,64 @@ def test_split_message_hard_break_when_no_whitespace():
 # ------------------------------------------------------------------------------
 
 @pytest.mark.asyncio
+async def test_webhook_rejects_when_secret_empty_in_production(mock_settings: Settings, monkeypatch):
+    prod_settings = mock_settings.model_copy(
+        update={"telegram_webhook_secret": SecretStr(""), "app_env": "production"}
+    )
+    monkeypatch.setattr("app.main.get_settings", lambda: prod_settings)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json={"update_id": 1, "message": {"text": "hi"}},
+        )
+        assert response.status_code == 403
+        assert "Webhook secret is not configured on server" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_webhook_allows_empty_secret_in_development(
+    mock_settings: Settings,
+    persona_loader,
+    monkeypatch,
+):
+    dev_settings = mock_settings.model_copy(
+        update={"telegram_webhook_secret": SecretStr(""), "app_env": "development"}
+    )
+    monkeypatch.setattr("app.main.get_settings", lambda: dev_settings)
+    monkeypatch.setattr("app.chat_handler.get_settings", lambda: dev_settings)
+
+    bot_token = dev_settings.telegram_bot_token.get_secret_value()
+    respx.post(dev_settings.chat_completions_url).mock(
+        return_value=httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "Dev response"}}]},
+        )
+    )
+    respx.post(f"https://api.telegram.org/bot{bot_token}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    respx.post(f"https://api.telegram.org/bot{bot_token}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json={"update_id": 1, "message": {"chat": {"id": 123}, "text": "hello"}},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+
+
+@pytest.mark.asyncio
 async def test_webhook_rejects_missing_secret_token(mock_settings: Settings, monkeypatch):
     monkeypatch.setattr("app.main.get_settings", lambda: mock_settings)
 
@@ -280,15 +338,74 @@ async def test_llm_failure_sends_apology_and_logs_no_secrets(
         }
         await handler.handle_telegram_update(update)
 
-    # Apology message was sent
+    # Apology message was sent and includes AI disclosure for the first interaction
     assert send_msg_route.call_count == 1
     sent_text = send_msg_route.calls[0].request.read().decode("utf-8")
+    assert "Hi, I'm an AI version of TestCreator" in sent_text
     assert "Sorry, I ran into an issue" in sent_text
 
     # No secret leaked in logs
     assert llm_key not in caplog.text
     assert bot_token not in caplog.text
     assert "Hello bot!" not in caplog.text  # User message text not in error log
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_disclosure_sent_once_even_on_llm_failure(
+    mock_settings: Settings,
+    persona_loader,
+):
+    bot_token = mock_settings.telegram_bot_token.get_secret_value()
+    state = ChatState()
+    client = TelegramClient(config=mock_settings)
+    quick_settings = mock_settings.model_copy(update={"llm_max_retries": 0})
+    handler = ChatHandler(
+        config=quick_settings,
+        persona_loader=persona_loader,
+        telegram_client=client,
+        state=state,
+    )
+
+    # First attempt: LLM fails (500)
+    # Second attempt: LLM succeeds (200)
+    respx.post(quick_settings.chat_completions_url).mock(
+        side_effect=[
+            httpx.Response(500, text="Internal glitch"),
+            httpx.Response(
+                200,
+                json={"choices": [{"message": {"role": "assistant", "content": "I am back!"}}]},
+            ),
+        ]
+    )
+    respx.post(f"https://api.telegram.org/bot{bot_token}/sendChatAction").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    send_msg_route = respx.post(f"https://api.telegram.org/bot{bot_token}/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+    )
+
+    chat_id = 999
+
+    # Message 1: fails
+    await handler.handle_telegram_update({
+        "update_id": 1,
+        "message": {"message_id": 1, "chat": {"id": chat_id}, "text": "First message"},
+    })
+    assert send_msg_route.call_count == 1
+    first_reply = send_msg_route.calls[0].request.read().decode("utf-8")
+    assert "Hi, I'm an AI version of TestCreator" in first_reply
+    assert "Sorry, I ran into an issue" in first_reply
+
+    # Message 2: succeeds, disclosure must NOT be present
+    await handler.handle_telegram_update({
+        "update_id": 2,
+        "message": {"message_id": 2, "chat": {"id": chat_id}, "text": "Second message"},
+    })
+    assert send_msg_route.call_count == 2
+    second_reply = send_msg_route.calls[1].request.read().decode("utf-8")
+    assert "Hi, I'm an AI version of" not in second_reply
+    assert "I am back!" in second_reply
 
 
 @pytest.mark.asyncio

@@ -32,8 +32,16 @@ async def telegram_webhook(
     settings = get_settings()
     configured_secret = settings.telegram_webhook_secret.get_secret_value()
 
-    # Verify secret token if configured
-    if configured_secret:
+    # Reject requests if secret is missing on server in non-development environments
+    if not configured_secret:
+        if settings.app_env != "development":
+            logger.warning("Rejected webhook request: TELEGRAM_WEBHOOK_SECRET is not configured on server.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Webhook secret is not configured on server",
+            )
+    else:
+        # Secret is configured: verify incoming header matches
         if not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token != configured_secret:
             logger.warning("Rejected Telegram webhook request with invalid secret token.")
             raise HTTPException(
