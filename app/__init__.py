@@ -1,0 +1,2 @@
+"""Alterego package."""
+
