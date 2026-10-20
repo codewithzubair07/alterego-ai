@@ -70,6 +70,20 @@ class Settings(BaseSettings):
     app_env: Literal["development", "production", "test"] = "development"
     log_level: str = "INFO"
 
+    # Telegram Bot settings
+    telegram_bot_token: SecretStr = Field(
+        default=SecretStr(""),
+        description="Bot token obtained from Telegram's @BotFather",
+    )
+    telegram_webhook_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="Secret token verified against the X-Telegram-Bot-Api-Secret-Token header",
+    )
+    telegram_api_base: str = Field(
+        default="https://api.telegram.org",
+        description="Base URL for Telegram Bot API",
+    )
+
     @property
     def chat_completions_url(self) -> str:
         """Returns normalized full URL for the chat completions endpoint."""

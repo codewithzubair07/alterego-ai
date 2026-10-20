@@ -22,6 +22,8 @@ def mock_settings() -> Settings:
         llm_max_tokens=256,
         llm_timeout_seconds=5.0,
         llm_max_retries=2,
+        telegram_bot_token=SecretStr("123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ_mock"),
+        telegram_webhook_secret=SecretStr("mock_webhook_secret_98765"),
     )
 
 

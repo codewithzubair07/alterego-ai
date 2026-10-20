@@ -12,6 +12,7 @@ SECRET_PATTERNS = [
     re.compile(r"gsk_[A-Za-z0-9_]{16,}", re.IGNORECASE),
     re.compile(r"AIzaSy[A-Za-z0-9\-_]{25,}", re.IGNORECASE),
     re.compile(r"sk-[A-Za-z0-9\-_]{20,}", re.IGNORECASE),
+    re.compile(r"[0-9]{8,11}:[a-zA-Z0-9_-]{34,36}"),  # Telegram bot tokens
 ]
 
 
@@ -42,6 +43,13 @@ class SecretRedactingFilter(logging.Filter):
             current_key = settings.llm_api_key.get_secret_value()
             if current_key and len(current_key) > 4:
                 text = text.replace(current_key, "[REDACTED_API_KEY]")
+            for secret_obj in (
+                settings.telegram_bot_token,
+                settings.telegram_webhook_secret,
+            ):
+                val = secret_obj.get_secret_value()
+                if val and len(val) > 4:
+                    text = text.replace(val, "[REDACTED_SECRET]")
         except Exception:
             pass
 
